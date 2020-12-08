@@ -32,15 +32,11 @@ impl PingWindow {
         // this value's the contribution to the normal distribution will be rapidly diluted
         // as actual heartbeats (usually much shorter than the initial value) fill the window.
         let deadline = Duration::from_secs(5);
-        let x = deadline.as_millis() as f64;
-        let sum2 = 2. * (x * 0.2) * (x * 0.2);
-        // we need to fill at least two values.
-        // otherwise integral calculation isn't possible.
         Self {
-            n: 2,
+            n: 1,
             last_ping: now,
-            sum: x * 2.,
-            sum2,
+            sum: deadline.as_millis() as f64,
+            sum2: 0.,
         }
     }
     pub fn last_ping(&self) -> Instant {
@@ -91,7 +87,14 @@ impl NormalDist {
     /// Calculate integral [x, inf]
     /// This is a monotonically decreasing function.
     fn integral(&self, x: f64) -> f64 {
-        let y = (x - self.mu) / self.sigma;
+        // any small sigma rounds up to 1ms
+        // which is negligible in the latency context.
+        let sigma = if self.sigma < 1. {
+            1.
+        } else {
+            self.sigma
+        };
+        let y = (x - self.mu) / sigma;
         let e = f64::exp(-y * (1.5976 + 0.070566 * y * y));
         if x > self.mu {
             e / (1. + e)
@@ -103,7 +106,7 @@ impl NormalDist {
     /// Note that this algorithm corrupts when v is near 0.
     fn integral_inv(&self, v: f64) -> f64 {
         assert!(v > 0.);
-        let eps = 0.0000000001;
+        let eps = 0.00000000001;
         let mut lower = -1e18 as f64;
         let mut upper = 1e18 as f64;
         let mut mid = 0.;
@@ -118,16 +121,19 @@ impl NormalDist {
         }
         mid
     }
-    /// Inverse function of `phi`.
-    pub fn phi_inv(&self, phi: f64) -> Duration {
-        let x = self.integral_inv(prob_from_phi(phi));
-        Duration::from_millis(x as u64)
-    }
     /// Calculate the phi from the current normal distribution
     /// and the duration from the last ping.
     pub fn phi(&self, elapsed: Duration) -> f64 {
         let x = elapsed.as_millis() as f64;
-        phi_from_prob(self.integral(x))
+        let y = self.integral(x); // 0 <= y < = 1
+        phi_from_prob(y)
+    }
+    /// Inverse function of `phi`.
+    /// Only phi <= 5 is supported for computational stability sake and this is practically sufficient.
+    pub fn phi_inv(&self, phi: f64) -> Duration {
+        assert!(0. < phi && phi <= 5.);
+        let x = self.integral_inv(prob_from_phi(phi));
+        Duration::from_millis(x as u64)
     }
 }
 
@@ -137,7 +143,7 @@ mod tests {
     #[tokio::test]
     async fn test_phi_detector() {
         let mut window = PingWindow::new();
-        for i in 0..100 {
+        for _ in 0..100 {
             window.add_ping(Instant::now());
         }
         loop {
@@ -148,7 +154,6 @@ mod tests {
             if phi > 10. {
                 break;
             }
-
             tokio::time::delay_for(Duration::from_millis(10)).await;
         }
     }
@@ -161,25 +166,15 @@ mod tests {
         dbg!(dist.phi_inv(3.));
     }
     #[test]
-    fn test_bisect() {
+    fn test_phi_inv() {
         let window = PingWindow::new();
         let dist = window.normal_dist();
-        for &x0 in &[1.,10.,100.,1000.,10000.] {
-            let v = dist.integral(x0);
-            dbg!(v);
-            let x1 = dist.integral_inv(v);
-            dbg!(x1);
-            assert!(f64::abs(x0 - x1) < 1.);
+        for phi in 1..=5 {
+            let phi = phi as f64;
+            let du = dist.phi_inv(phi);
+            dbg!(phi);
+            dbg!(du);
+            dbg!(dist.phi(du));
         }
-    }
-    #[test]
-    fn test_bisect_limit() {
-        let window = PingWindow::new();
-        let dist = window.normal_dist();
-        let x = dist.integral_inv(0.000000001);
-        dbg!(x);
-        // this isn't working
-        let x = dist.integral_inv(0.0000000001);
-        dbg!(x);
     }
 }
