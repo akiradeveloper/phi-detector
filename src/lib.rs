@@ -15,9 +15,6 @@ pub fn phi_from_prob(x: f64) -> f64 {
     assert!(0. <= x  && x <= 1.);
     -f64::log10(x)
 }
-fn prob_from_phi(x: f64) -> f64 {
-    f64::exp(-x)
-}
 /// Set of recent N ping intervals.
 pub struct PingWindow {
     n: usize,
@@ -102,38 +99,12 @@ impl NormalDist {
             1. - 1./(1. + e)
         }
     }
-    /// Find a x so integral [x, inf] is v.
-    /// Note that this algorithm corrupts when v is near 0.
-    fn integral_inv(&self, v: f64) -> f64 {
-        assert!(v > 0.);
-        let eps = 0.00000000001;
-        let mut lower = -1e18 as f64;
-        let mut upper = 1e18 as f64;
-        let mut mid = 0.;
-        while f64::abs(v - self.integral(mid)) > eps {
-            let y = self.integral(mid);
-            if y < v {
-                upper = mid;
-            } else {
-                lower = mid;
-            }
-            mid = (lower + upper) / 2.;
-        }
-        mid
-    }
     /// Calculate the phi from the current normal distribution
     /// and the duration from the last ping.
     pub fn phi(&self, elapsed: Duration) -> f64 {
         let x = elapsed.as_millis() as f64;
         let y = self.integral(x); // 0 <= y < = 1
         phi_from_prob(y)
-    }
-    /// Inverse function of `phi`.
-    /// Only phi <= 5 is supported for computational stability sake and this is practically sufficient.
-    pub fn phi_inv(&self, phi: f64) -> Duration {
-        assert!(0. < phi && phi <= 5.);
-        let x = self.integral_inv(prob_from_phi(phi));
-        Duration::from_millis(x as u64)
     }
 }
 
@@ -163,18 +134,5 @@ mod tests {
         let dist = window.normal_dist();
         dbg!(dist.mu());
         dbg!(dist.sigma());
-        dbg!(dist.phi_inv(3.));
-    }
-    #[test]
-    fn test_phi_inv() {
-        let window = PingWindow::new();
-        let dist = window.normal_dist();
-        for phi in 1..=5 {
-            let phi = phi as f64;
-            let du = dist.phi_inv(phi);
-            dbg!(phi);
-            dbg!(du);
-            dbg!(dist.phi(du));
-        }
     }
 }
