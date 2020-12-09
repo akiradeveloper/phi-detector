@@ -23,17 +23,24 @@ pub struct PingWindow {
     sum2: f64,
 }
 impl PingWindow {
-    pub fn new() -> Self {
-        let now = Instant::now();
-        // initially, we have a super long value in the window
-        // this value's the contribution to the normal distribution will be rapidly diluted
-        // as actual heartbeats (usually much shorter than the initial value) fill the window.
-        let deadline = Duration::from_secs(5);
+    pub fn new(intervals: &[Duration], last_ping: Instant) -> Self {
+        let n = intervals.len();
+        assert!(n > 0);
+        let mut sum = 0.;
+        for &x in intervals {
+            sum += x.as_millis() as f64;
+        }
+        let mean = sum / n as f64;
+        let mut sum2 = 0.;
+        for &x in intervals {
+            let d = x.as_millis() as f64 - mean;
+            sum2 += d * d;
+        }
         Self {
             n: 1,
-            last_ping: now,
-            sum: deadline.as_millis() as f64,
-            sum2: 0.,
+            last_ping,
+            sum,
+            sum2,
         }
     }
     pub fn last_ping(&self) -> Instant {
@@ -113,7 +120,7 @@ mod tests {
     use super::*;
     #[tokio::test]
     async fn test_phi_detector() {
-        let mut window = PingWindow::new();
+        let mut window = PingWindow::new(&[Duration::from_secs(5)], Instant::now());
         for _ in 0..100 {
             window.add_ping(Instant::now());
         }
@@ -130,7 +137,7 @@ mod tests {
     }
     #[test]
     fn test_values() {
-        let window = PingWindow::new();
+        let window = PingWindow::new(&[Duration::from_secs(5)], Instant::now());
         let dist = window.normal_dist();
         dbg!(dist.mu());
         dbg!(dist.sigma());
